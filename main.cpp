@@ -9,6 +9,37 @@
 
 #define MSG "HTTP/1.0 302 Redirect\r\nLocation: http://warning.or.kr\r\n\r\n"
 
+// for dump packet
+void DumpHex(const void* data, int size) {
+  char ascii[17];
+  int i, j;
+  ascii[16] = '\0';
+  for (i = 0; i < size; ++i) {
+    printf("%02X ", ((unsigned char*)data)[i]);
+    if (((unsigned char*)data)[i] >= ' ' && ((unsigned char*)data)[i] <= '~') {
+      ascii[i % 16] = ((unsigned char*)data)[i];
+    } else {
+      ascii[i % 16] = '.';
+    }
+    if ((i+1) % 8 == 0 || i+1 == size) {
+      printf(" ");
+      if ((i+1) % 16 == 0) {
+        printf("|  %s \n", ascii);
+      } else if (i+1 == size) {
+        ascii[(i+1) % 16] = '\0';
+        if ((i+1) % 16 <= 8) {
+          printf(" ");
+        }
+        for (j = (i+1) % 16; j < 16; ++j) {
+          printf("   ");
+        }
+        printf("|  %s \n", ascii);
+      }
+    }
+  }
+}
+
+
 void usage() {
     printf("syntax : tcp-block <interface> <pattern>\n");
     printf("sample : tcp-block wlan0 \"Host: test.gilgil.net\"\n");
@@ -64,7 +95,7 @@ int	getMyInfo(t_info *MyInfo, char *dev){
 }
 
 uint16_t CheckSum(uint16_t *buffer, int size){
-    uint16_t cksum = 0;
+    uint32_t cksum = 0;
 
     while(size > 1){
         cksum += *buffer++;
@@ -85,7 +116,7 @@ uint16_t CheckSum(uint16_t *buffer, int size){
 int main(int argc, char* argv[]){
 	if(argc != 3){
 		usage();
-		return 1;
+		return -1;
 	}
 	char* dev = argv[1];
 	char* pattern = argv[2];
@@ -98,6 +129,10 @@ int main(int argc, char* argv[]){
 	}
 
 	getMyInfo(&MyInfo, dev);
+
+	int sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+	const int on = 1;
+	setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &on, sizeof(on));
 
 	while(true){
 		struct pcap_pkthdr* header;
@@ -124,17 +159,17 @@ int main(int argc, char* argv[]){
         uint32_t tcphdr_len = ethIpTcpHdr->tcpHdr_.th_off * 4;
         uint32_t tcpdata_len = ippkt_len - iphdr_len - tcphdr_len;
         if (tcpdata_len == 0) continue; // no data
-
+		
 		char *data = (char*)(packet + sizeof(EthHdr) + iphdr_len + tcphdr_len);
 		if(strstr(data, pattern) == NULL){
 			continue;
 		}
 
-
 		// Forward Packet
 		EthIpTcpHdr* forward_packet;
+		forward_packet = (EthIpTcpHdr *)malloc(sizeof(EthIpTcpHdr));
 		uint32_t fwd_len = sizeof(EthIpTcpHdr); // no data
-		memcpy(&forward_packet, packet, sizeof(EthIpTcpHdr));
+		memcpy(forward_packet, packet, sizeof(EthIpTcpHdr));
 
 		forward_packet->ethHdr_.smac_ = MyInfo.mac;
 
@@ -148,6 +183,7 @@ int main(int argc, char* argv[]){
 		forward_packet->tcpHdr_.check = 0;
 
 		PseudoHdr* pseudoHdr;
+		pseudoHdr = (PseudoHdr *)malloc(sizeof(PseudoHdr));
 		memset(pseudoHdr, 0, sizeof(PseudoHdr));
 		pseudoHdr->srcAddr = ethIpTcpHdr->ipHdr_.sip_;
 		pseudoHdr->dstAddr = ethIpTcpHdr->ipHdr_.dip_;
@@ -160,7 +196,6 @@ int main(int argc, char* argv[]){
 		if (pcap_sendpacket(handle, reinterpret_cast<const u_char*>(forward_packet), fwd_len)) {
 			printf("pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
         }
-
 
 		// Backward Packet
 		struct {
@@ -190,6 +225,7 @@ int main(int argc, char* argv[]){
 		p.backward_Hdr.tcpHdr_.th_off = (sizeof(TcpHdr) / 4);
 		p.backward_Hdr.tcpHdr_.check = 0;
 
+		
 		memset(pseudoHdr, 0, sizeof(PseudoHdr));
 		pseudoHdr->srcAddr = ethIpTcpHdr->ipHdr_.dip_;
 		pseudoHdr->dstAddr = ethIpTcpHdr->ipHdr_.sip_;
@@ -199,20 +235,19 @@ int main(int argc, char* argv[]){
 		sum = CheckSum((uint16_t*)&p.backward_Hdr.tcpHdr_, sizeof(TcpHdr)) + CheckSum((uint16_t*)&pseudoHdr, sizeof(PseudoHdr));
 		p.backward_Hdr.tcpHdr_.check = (sum & 0xffff) + (sum >> 16);
 
-		int sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
-		const int on = 1;
-		setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &on, sizeof(on));
+		
 
 
 		struct sockaddr_in sockaddr;
 		sockaddr.sin_family = AF_INET;
 		sockaddr.sin_port = ethIpTcpHdr->tcpHdr_.sport;
 		sockaddr.sin_addr.s_addr = ethIpTcpHdr->ipHdr_.sip_;
+		DumpHex(&p.backward_Hdr.ipHdr_,sizeof(IpHdr) + sizeof(TcpHdr) + sizeof(MSG));
 		sendto(sockfd, &p.backward_Hdr.ipHdr_, sizeof(IpHdr) + sizeof(TcpHdr) + sizeof(MSG), 0, (struct sockaddr *)(&sockaddr), sizeof(sockaddr));
 		close(sockfd);
  
 
-
+		
 
 	}
 
