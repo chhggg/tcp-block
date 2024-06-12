@@ -164,6 +164,7 @@ int main(int argc, char* argv[]){
 		if(strstr(data, pattern) == NULL){
 			continue;
 		}
+		// printf("%s\n", data);
 
 		// Forward Packet
 		EthIpTcpHdr* forward_packet;
@@ -190,7 +191,7 @@ int main(int argc, char* argv[]){
 		pseudoHdr->proto = ethIpTcpHdr->ipHdr_.proto;
 		pseudoHdr->tcpLen = htons(sizeof(TcpHdr));
 
-		uint32_t sum = CheckSum((uint16_t*)&forward_packet->tcpHdr_, sizeof(TcpHdr)) + CheckSum((uint16_t*)&pseudoHdr, sizeof(PseudoHdr));
+		uint32_t sum = CheckSum((uint16_t*)&forward_packet->tcpHdr_, sizeof(TcpHdr)) + CheckSum((uint16_t*)pseudoHdr, sizeof(PseudoHdr));
 		forward_packet->tcpHdr_.check = (sum & 0xffff) + (sum >> 16);
 
 		if (pcap_sendpacket(handle, reinterpret_cast<const u_char*>(forward_packet), fwd_len)) {
@@ -230,9 +231,9 @@ int main(int argc, char* argv[]){
 		pseudoHdr->srcAddr = ethIpTcpHdr->ipHdr_.dip_;
 		pseudoHdr->dstAddr = ethIpTcpHdr->ipHdr_.sip_;
 		pseudoHdr->proto = ethIpTcpHdr->ipHdr_.proto;
-		pseudoHdr->tcpLen = htons(sizeof(TcpHdr));
+		pseudoHdr->tcpLen = htons(sizeof(TcpHdr)+sizeof(MSG));
 
-		sum = CheckSum((uint16_t*)&p.backward_Hdr.tcpHdr_, sizeof(TcpHdr)) + CheckSum((uint16_t*)&pseudoHdr, sizeof(PseudoHdr));
+		sum = CheckSum((uint16_t*)&p.backward_Hdr.tcpHdr_, sizeof(TcpHdr)+sizeof(MSG)) + CheckSum((uint16_t*)pseudoHdr, sizeof(PseudoHdr));
 		p.backward_Hdr.tcpHdr_.check = (sum & 0xffff) + (sum >> 16);
 
 		
@@ -242,7 +243,7 @@ int main(int argc, char* argv[]){
 		sockaddr.sin_family = AF_INET;
 		sockaddr.sin_port = ethIpTcpHdr->tcpHdr_.sport;
 		sockaddr.sin_addr.s_addr = ethIpTcpHdr->ipHdr_.sip_;
-		DumpHex(&p.backward_Hdr.ipHdr_,sizeof(IpHdr) + sizeof(TcpHdr) + sizeof(MSG));
+		DumpHex(&p,bck_len);
 		sendto(sockfd, &p.backward_Hdr.ipHdr_, sizeof(IpHdr) + sizeof(TcpHdr) + sizeof(MSG), 0, (struct sockaddr *)(&sockaddr), sizeof(sockaddr));
 		close(sockfd);
  
